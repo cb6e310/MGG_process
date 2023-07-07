@@ -12,13 +12,13 @@ from scipy import signal
 
 from scipy.fft import fftshift
 
-from sklearn.decomposition import FastICA 
-from sklearn.preprocessing import normalize
+from sklearn.decomposition import FastICA, PCA
+from sklearn.preprocessing import StandardScaler
 
 import sobi
 import os
 import random
-
+import re
 
 from nptdms import TdmsFile
 
@@ -26,10 +26,7 @@ from nptdms import TdmsFile
 class TDMSData:
     def __init__(self, folder_path, resample_mode="30ms", name_condition=None):
         """
-
-
         make sure alignment in one folder
-
         """
 
         self.folder_path = folder_path
@@ -42,21 +39,23 @@ class TDMSData:
 
         self.files = [f for f in os.listdir(self.folder_path) if name_condition in f]
 
-        self.groups, self.column_names = read_tdms_properties(
-            os.path.join(self.folder_path, self.files[0])
-        )
 
         self.resample_mode = resample_mode
 
-        self.freq = int(1/time_string_to_float(self.resample_mode))
+        # calculate resample interval
+        self.desire_freq = int(1/time_string_to_float(self.resample_mode))
+        freq_pattern = r"(\d+)HZ"
+        self.original_freq = int(re.findall(freq_pattern, self.files[0], re.IGNORECASE)[0])
+        self.interval = int(self.original_freq / self.desire_freq)
 
-        self.interval = 
-
+        self.group_names, self.column_names = read_tdms_properties(os.path.join(self.folder_path,self.files[0]))
+        
         for file in self.files:
             if not file.endswith(".tdms"):
                 continue
 
             data = read_tdms2df(os.path.join(self.folder_path, file))
+
 
             data.columns = self.column_names
 
@@ -74,20 +73,20 @@ class TDMSData:
             ai_list = [
                 data.iloc[:, i : i + 2] for i in range(0, len(self.column_names), 2)
             ]
-
+            scaler = StandardScaler()
             for i, ai in enumerate(ai_list):
                 ai = ai.set_index(ai.columns[0])
 
                 if resample_mode != None:
                     count = 0
                     ds_ai = []
-                    ai = np.squeeze(ai.to_numpy())[::4000]
+                    ai = np.squeeze(ai.to_numpy())[::self.interval]
                     ai_list[i] = pd.DataFrame(ai, columns=[ai_list[i].columns[0]])
                     ai_list[i] = remove_outliers(ai_list[i], ai_list[i].columns[0])
-
                 else:
                     ai_list[i] = remove_outliers(ai, ai.columns[0])
 
+                ai_list[i] = scaler.fit_transform(ai_list[i])
             # print(ai_list)
 
             self.data_dict.update({file: ai_list})
@@ -108,6 +107,7 @@ class TDMSData:
             print("duration:", time.max() - time.min())
 
             break
+        return {'channels': self.column_names, 'segment count': len(self.data_dict), 'segment length stat (max, min, mean)': self.average_mater(self.data_dict.values())}
 
     def plot_samples(self, num):
         assert num <= 5
@@ -182,27 +182,6 @@ class TDMSData:
         axs_2.plot(stats_2, linewidth=1)
         plt.setp(axs_2.get_xticklabels(), rotation=30, horizontalalignment="right")
 
-        # for i, (name, labels) in enumerate(name_dict_1.items()):
-        #     axs = subfigs[i].subplots(len(value), 1)
-        #     subfigs[i].suptitle(name)
-        #     current_stats = stats_1[i]
-        #     for j, ax in enumerate(axs):
-        #         ax.set_xlabel(labels[1])
-        #         ax.set_ylabel(labels[0])
-        #         if i == 1:
-        #             ax.plot(current_stats[j][0], current_stats[j][1], linewidth=1)
-        #             ax.set_xlim([0, 25])
-        #         else:
-        #             ax.plot(current_stats[j], linewidth=1)
-        #         plt.setp(ax.get_xticklabels(), rotation=30, horizontalalignment="right")
-        # for i, (name, labels) in enumerate(name_dict_2.items()):
-        #     axs = subfigs[i + len(name_dict_1)].subplots(len(name_dict_2), 1)
-        #     subfigs[i + len(name_dict_1)].suptitle(name)
-        #     for j, ax in enumerate(axs):
-        #         ax.set_xlabel(labels[1])
-        #         ax.set_ylabel(labels[0])
-        #         ax.plot(stats_2, linewidth=1)
-
         if save == True:
             save_path = os.path.join(self.folder_path, "stats")
             if not os.path.exists(save_path):
@@ -261,25 +240,26 @@ class TDMSData:
         for ai in value:
             ai = ai.to_numpy()
             ai /= ai.std(axis=0)
-            f, pxx = self.calculate_psd(ai)
+            f, pxx = self.calculate_psd(ai, 2 * self.desire_freq)
             # sobi_res = self.calculate_sobi(ai)
 
             psd_list.append([f, pxx])
             # sobi_list.append(sobi_res)
         return [psd_list, ica_res]
 
-    def calculate_psd(self, arr):
+    @staticmethod
+    def calculate_psd(arr, fs):
         """
-
         return f_cpm, pxx
         """
         arr = np.squeeze(arr)
         interval = time_string_to_float(self.resample_mode)
         print(arr.shape)
-        f, pxx = signal.welch(arr, fs=2 / interval, nperseg=512)
+        f, pxx = signal.welch(arr, fs=fs, nperseg=512)
         return f * 60, pxx
 
-    def calculate_ica(self, arr):
+    @staticmethod
+    def calculate_ica(arr):
         """
 
         return [len(arr), n_components] array
@@ -288,7 +268,17 @@ class TDMSData:
         transformer = FastICA(n_components=1)
         return transformer.fit_transform(arr)
 
-    def calculate_sobi(self, arr):
+    @staticmethod
+    def calculate_pca(arr):
+        """
+
+        return [len(arr), n_components] array
+        """
+
+        transformer = PCA(n_components=1)
+        return transformer.fit_transform(arr)
+
+    def calculate_sobi(arr):
         """
         return
         """
@@ -296,6 +286,22 @@ class TDMSData:
         s, _, _ = sobi.sobi(arr)
         return s
 
+    def calculate_total_pca(self):
+        """
+        return [len(arr), n_components] array
+        """
+        channel_num = len(list(self.data_dict.values())[0])
+        channel_values = []
+        length = len(list(self.data_dict.values())[0][0])
+        for i in range(channel_num):
+            for j in range(len(self.data_dict)):
+                current_value = list(self.data_dict.values())[j][i]
+                current_value = np.resize(current_value, (length, 1))
+                channel_values.append(current_value)
+        channel_values = np.squeeze(np.array(channel_values)).T
+        res = self.calculate_pca(channel_values)
+        
+        return res
 
 def remove_outliers(df, column, alpha=3):
     return df[(np.abs(stats.zscore(df[column])) < alpha)]

@@ -2,7 +2,7 @@ import utils
 from utils import TDMSData
 
 
-import os
+import os, sys
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -24,12 +24,14 @@ tdms structure:
     |_...
 '''
 
-def remove_outliers(df, column, alpha=3):
-    return df[(np.abs(stats.zscore(df[column])) < alpha)]
+'''
+make sure the tdms file name has the format of: **hz (hz is case insensitive)
+'''
 
 
 if __name__ == "__main__":
-    folder_path = '../datasets/noise'
-    data = TDMSData(folder_path, name_condition='noise' ,resample_mode='100ms')
+    script_directory = os.path.dirname(os.path.abspath(sys.argv[0]))
+    folder_path = os.path.join(script_directory, '../datasets/noise')
+    data = TDMSData(folder_path, name_condition='noise' ,resample_mode='30ms')
     # data.plot_samples(num=3)
     data.save_stats()

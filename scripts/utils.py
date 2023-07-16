@@ -3,7 +3,7 @@ import pandas as pd
 
 
 import matplotlib.pyplot as plt
-
+from matplotlib.colors import LogNorm
 from datetime import datetime, timedelta
 
 
@@ -39,10 +39,6 @@ class TDMSData:
         self, folder_path, resample_mode="30ms", name_condition=None, normalize=False
     ):
         """
-
-
-
-
         make sure alignment in one folder
         """
 
@@ -98,7 +94,6 @@ class TDMSData:
                     self.difference_column_names.append(column)
 
             # generate channel list
-
             ai_list = [
                 data.iloc[:, i : i + 2] for i in range(0, len(self.column_names), 2)
             ]
@@ -270,6 +265,37 @@ class TDMSData:
 
             input("press any key to continue")
 
+    def plot_spectrogram(self, limit=500, freq_unit="hz"):
+        for name, ai_list in self.data_dict.items():
+            fig, axs = plt.subplots(len(ai_list), 1, figsize=(18, 20))
+
+            for j, ax in enumerate(axs):
+                current_spec = self.calculate_spectrogram(
+                    ai_list[j], fs=self.desire_freq, freq_unit=freq_unit
+                )
+
+                # ax.specgram(ai_list[j], Fs=self.desire_freq, NFFT=1024)
+                ax.set_ylabel("freq [" + freq_unit + "]")
+
+                ax.set_xlabel("time [s]")
+
+                im = ax.pcolormesh(
+                    current_spec[1],
+                    current_spec[0],
+                    current_spec[2],
+                    shading="auto",
+                    cmap="inferno",
+                    norm=LogNorm(vmin=0.001, vmax=10),
+                )
+                plt.colorbar(im, ax=ax)
+
+                if limit != None:
+                    ax.set_ylim([0, limit])
+
+            plt.tight_layout()
+            plt.show()
+            input("press any key to continue")
+
     def plot_butter(self, cutoff, btype, order=5, limit=50, plot_psd=True, save=False):
         for name, ai_list in self.data_dict.items():
             fig = plt.figure(figsize=(18, 18))
@@ -289,7 +315,6 @@ class TDMSData:
                     current_psd = self.calculate_psd(
                         ai_list[j], fs=self.desire_freq, freq_unit="hz"
                     )
-
                     ax.set_xlabel("freq: hz")
 
                     ax.set_ylabel("W/Hz")
@@ -442,8 +467,6 @@ class TDMSData:
     @staticmethod
     def calculate_ica(arr):
         """
-
-
         return [len(arr), n_components] array
         """
 
@@ -453,16 +476,31 @@ class TDMSData:
     @staticmethod
     def calculate_pca(arr):
         """
-
-
-
-
-
         return [len(arr), n_components] array
         """
 
         transformer = PCA(n_components=1)
         return transformer.fit_transform(arr)
+
+    @staticmethod
+    def calculate_spectrogram(arr, fs, freq_unit="hz"):
+        """
+        return f, t, pxx
+        """
+        
+        if type(arr) == pd.DataFrame:
+            arr = arr.to_numpy()
+        arr = np.squeeze(arr)
+        f, t, Sxx = signal.spectrogram(arr, fs=fs, nperseg=15360, noverlap=100, nfft=40960)
+
+        if freq_unit == "hz":
+            return f, t, Sxx
+
+        elif freq_unit == "cpm":
+            return f * 60, t, Sxx
+
+        else:
+            raise ("wrong freq unit")
 
     def calculate_sobi(arr):
         """
@@ -474,10 +512,6 @@ class TDMSData:
 
     def calculate_total_pca(self):
         """
-
-
-
-
         return [len(arr), n_components] array
         """
 
@@ -596,3 +630,4 @@ def time_string_to_float(time_string):
 
     result = value * timedelta_unit.total_seconds()
     return result
+

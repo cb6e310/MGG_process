@@ -26,7 +26,7 @@ def __butter_bandpass(lowcut, highcut, fs, order):
 def butter_filter(data, cutoff, fs, btype, order=5):
     data = np.squeeze(np.array(data))
 
-    if btype == "low":
+    if btype == "lowpass":
         sos = __butter_lowpass(cutoff, fs, order=order)
     elif btype == "bandpass":
         assert isinstance(cutoff, list) and len(cutoff) == 2 and cutoff[0] < cutoff[1]

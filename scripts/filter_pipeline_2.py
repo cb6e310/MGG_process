@@ -96,7 +96,7 @@ def plot_psd(*data, fs, name=None, limit=None):
     plt.show()
 
 
-def plot_psd_with_samples(*data, fs, name=None, limit=None, partial=None):
+def plot_sp_with_samples(*data, fs, name=None, limit=None, partial=None):
     """
     limit: the upper limit of frequency to show
     partial: the time interval to show
@@ -137,6 +137,46 @@ def plot_psd_with_samples(*data, fs, name=None, limit=None, partial=None):
 
     plt.show()
 
+def plot_psd_with_samples(*data, fs, name=None, limit=None, partial=None, freq_unit='Hz'):
+    """
+    limit: the upper limit of frequency to show
+    partial: the time interval to show
+    """
+
+    freq_unit = freq_unit.lower()
+
+    fig, ax = plt.subplots(len(data), 2, figsize=(18, 18))
+    fig.suptitle(name)
+    time = np.arange(0, len(data[0])) / fs
+    for i, d in enumerate(data):
+        ax[i][0].plot(time, d)
+        ax[i][0].set_xlabel("time [s]")
+        ax[i][0].set_ylabel("amplitude")
+        if i != 0:
+            if partial != None:
+                ax[i][0].set_ylim(-50, 50)
+            else:
+                pass
+                # ax[i][0].set_ylim(-200, 200)
+
+        f, pxx = TDMSData.calculate_psd(d, fs)
+
+        if freq_unit == 'hz':
+            ax[i][1].plot(f, pxx)
+            ax[i][1].set_xlabel("frequency [Hz]")
+        elif freq_unit == 'cpm':
+            ax[i][1].plot(f*60, pxx)
+            ax[i][1].set_xlabel("frequency [cpm]")
+        ax[i][1].set_ylabel("PSD")
+
+        if limit:
+            ax[i][1].set_xlim(0, limit)
+
+        if partial != None:
+            ax[i][0].set_xlim(partial[0], partial[1])
+            ax[i][1].set_xlim(partial[0], partial[1])
+
+    plt.show()
 
 def plot_imfs(IMFs, fs, name=None, partial=None):
     colors = cm.rainbow(np.linspace(0, 1, IMFs.shape[1]))
@@ -158,10 +198,8 @@ def plot_imfs(IMFs, fs, name=None, partial=None):
 
 if __name__ == "__main__":
     script_directory = os.path.dirname(os.path.abspath(sys.argv[0]))
-    folder_path = os.path.join(script_directory, "../datasets/MGG_human")
     folder_path_noise = os.path.join(script_directory, "../datasets/noise")
-    MCG_path = os.path.join(script_directory, "../datasets/MCG")
-    plank_path = os.path.join(script_directory, "../datasets/MCG/plank")
+    foler_path_MGG = os.path.join(script_directory, "../datasets/MGG_human")
     # data = TDMSData(folder_path, name_condition='noise' ,resample_mode='30ms')
 
     # data_noise = TDMSData(folder_path=folder_path_noise, name_condition='noise' ,resample_mode=None)
@@ -177,7 +215,7 @@ if __name__ == "__main__":
     # data_3 = TDMSData(folder_path=MCG_path, name_condition='MCG' ,resample_mode=None)
 
     data_4 = TDMSData(
-        folder_path=plank_path, name_condition="pingbanzhicheng", resample_mode=None
+        folder_path=foler_path_MGG, name_condition="MMG-W", resample_mode=None
     )
 
     partial = [70, 80]
@@ -185,23 +223,24 @@ if __name__ == "__main__":
         data_wip_0 = data_wip[2].to_numpy()
 
         data_wip_1 = butter_filter(
-            data_wip_0, [0.5, 45], data_4.desire_freq, btype="bandpass", order=4
+            data_wip_0, 10, data_4.desire_freq, btype="lowpass", order=4
         )
         # plot_samples(data_wip_0, data_wip_1, name=name)
         data_wip_2 = notch_filter(data_wip_1, data_4.desire_freq, [50, 40, 20])
-        IMFs, data_wip_3 = emd_filter(data_wip_2, emd_mode=1, denoise_mode=0, plot=True, select=[5,6,7])
+        # IMFs, data_wip_3 = emd_filter(data_wip_2, emd_mode=1, denoise_mode=0, plot=True, select=[5,6,7])
 
-        plot_imfs(IMFs, data_4.desire_freq, name=name, partial=partial)
+        # plot_imfs(IMFs, data_4.desire_freq, name=name, partial=None)
 
         plot_psd_with_samples(
             data_wip_0,
             data_wip_1,
             data_wip_2,
-            data_wip_3,
+            # data_wip_3,
             fs=data_4.desire_freq,
             name=name,
-            limit=50,
-            partial=partial
+            limit=100,
+            partial=None,
+            freq_unit='Hz'
         )
 
         input("press any key to continue")

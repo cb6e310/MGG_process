@@ -122,6 +122,81 @@ def test_2():
 
     plt.show()
 
+def test_3():
+    #%% Simple example: generate signal with 3 components + noise  
+    import numpy as np  
+    import matplotlib.pyplot as plt  
+    from vmdpy import VMD  
+
+    #. Time Domain 0 to T  
+    T = 1000  
+    fs = 1/T  
+    t = np.arange(1,T+1)/T  
+    freqs = 2*np.pi*(t-0.5-fs)/(fs)  
+
+    #. center frequencies of components  
+    f_1 = 2  
+    f_2 = 24  
+    f_3 = 288  
+
+    #. modes  
+    v_1 = (np.cos(2*np.pi*f_1*t))  
+    v_2 = 1/4*(np.cos(2*np.pi*f_2*t))  
+    v_3 = 1/16*(np.cos(2*np.pi*f_3*t))  
+
+    f = v_1 + v_2 + v_3 + 0.1*np.random.randn(v_1.size)  
+
+    #. some sample parameters for VMD  
+    alpha = 2000       # moderate bandwidth constraint  
+    tau = 0.            # noise-tolerance (no strict fidelity enforcement)  
+    K = 3              # 3 modes  
+    DC = 0             # no DC part imposed  
+    init = 1           # initialize omegas uniformly  
+    tol = 1e-7  
+
+
+    #. Run VMD 
+    u, u_hat, omega = VMD(f, alpha, tau, K, DC, init, tol)  
+
+    #. Visualize decomposed modes
+    plt.figure()
+    plt.subplot(2,1,1)
+    plt.plot(f)
+    plt.title('Original signal')
+    plt.xlabel('time (s)')
+    plt.subplot(2,1,2)
+    plt.plot(u.T)
+    plt.title('Decomposed modes')
+    plt.xlabel('time (s)')
+    plt.legend(['Mode %d'%m_i for m_i in range(u.shape[0])])
+    plt.tight_layout()
+
+    plt.show()
+
+def test_4():
+    import numpy as np
+import matplotlib.pylab as plt
+import padasip as pa
+
+# creation of data
+N = 500
+x = np.random.normal(0, 1, (N, 4)) # input matrix
+v = np.random.normal(0, 0.1, N) # noise
+d = 2*x[:,0] + 0.1*x[:,1] - 4*x[:,2] + 0.5*x[:,3] + v # target
+
+# identification
+f = pa.filters.FilterLMS(n=4, mu=0.1, w="random")
+y, e, w = f.run(d, x)
+
+# show results
+plt.figure(figsize=(15,9))
+plt.subplot(211);plt.title("Adaptation");plt.xlabel("samples - k")
+plt.plot(d,"b", label="d - target")
+plt.plot(y,"g", label="y - output");plt.legend()
+plt.subplot(212);plt.title("Filter error");plt.xlabel("samples - k")
+plt.plot(10*np.log10(e**2),"r", label="e - error [dB]");plt.legend()
+plt.tight_layout()
+plt.show()
 
 if __name__ == "__main__":
-    test_2()
+    test_4()

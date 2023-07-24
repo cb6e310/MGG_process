@@ -453,7 +453,7 @@ class TDMSData:
 
         arr = np.squeeze(arr)
 
-        f, pxx = signal.welch(arr, fs=fs, nperseg=1024)
+        f, pxx = signal.welch(arr, fs=fs, nperseg=600000)
 
         if freq_unit == "hz":
             return f, pxx

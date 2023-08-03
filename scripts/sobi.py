@@ -2,214 +2,235 @@ import numpy as np
 import itertools
 import random
 
-def time_lagged_cov(X, num_lags):
+from sklearn.utils.validation import check_is_fitted
+from sklearn.base import TransformerMixin, BaseEstimator
 
-    N = X.shape[0]
-    L = X.shape[1] - num_lags
-    R = np.empty([num_lags,N,N])
-
-    center = lambda x: x-x.mean(1)[:,None]
-
-    X0 = center(X[:, 0:(0+L)])
+def center(X, mean=None):
     
-    for k in range(num_lags):
-        Xk = center(X[:,k:(k+L)])
+    """
+    Function to center the data using empirical mean to have each variable with zero mean.
+    
+    Attributes:
+        * X: data to center
+        * mean: if the true mean is known, can be used (default=None)
+    
+    Returns: 
+        * Centered data
+    """
+    
+    if mean is None:
+        return X - X.mean(axis=1, keepdims=True)
+    else:
+        return X - mean
+    
+def time_lagged_autocov(X, lags):
+    
+    """
+    Computes the auto-covariance tensor, containing all lagged-autocovariance with lag from 0 (covariance) to lags
+    
+    Attributes:
+        * X: time series data (dimension: variables x time)
+        * lags: number of lags to consider
+        
+    Returns:
+        * Autocovariance tensor
+        
+    """
+    
+    lags = lags + 1
+    n, l = X.shape
+    L = l - lags
+    R = np.empty([lags, n, n])
+    
+    X0 = center(X[:, :L])
+    
+    for k in range(lags):
+        Xk = center(X[:, k:k+L])
         R[k] = (1.0/L)*(X0.dot(Xk.T))
         R[k] = 0.5*(R[k] + R[k].T)
-
+    
     return R
 
-
-def prewhiten(X):
-
-    # subtract mean
-    Xw = X - X.mean(1)[:, None]
-
-    # Compute SVD
-    U,s,V = np.linalg.svd(Xw, full_matrices=False)
-    Sinv = np.linalg.pinv(np.diag(s))
-
-    # Find principal components
-    Q  = np.dot(Sinv, U.T)
-    Xw = Q.dot(X)
-
-    return Q, Xw
-
-
-def submat_mul(X, i, j, R, multype='post'):
-
-    if multype.lower() == 'post':
-        idx_i = (..., i)
-        idx_j = (..., j)
-    elif multype.lower() == 'pre':
-        idx_i = (..., i, slice(None))
-        idx_j = (..., j, slice(None))
-
-     # In place multiplication X*R
-    col_i = X[idx_i]*1.0
-    col_j = X[idx_j]*1.0
-    X[idx_i] = R[0,0]*col_i + R[0,1]*col_j
-    X[idx_j] = R[1,0]*col_i + R[1,1]*col_j
-
-    return X
-
-def max_eigvec(A):
-    # Find eigenvector associated with largest eigenvalue
-    [eigvals,v] = np.linalg.eigh(A)
-    v = v[:,-1]
-    return v
-
-def generate_index_pairs(idx_range, random_order=True):
-    ij_pairs = itertools.combinations(idx_range, 2)
-    ij_pairs = list(ij_pairs)
-    if random_order:
-        random.shuffle(ij_pairs)
-    
-    return ij_pairs
-
-def off(X):
-    off_ = 0
-    for x in X:
-        off_ += (np.linalg.norm(x,ord='fro')**2 - np.linalg.norm(np.diag(x))**2)
-
-    return off_/np.max(X)
-
-def jd(X, eps=1.0e-6, random_order = True):
-
-    """jointly diagonalize several matrices.
-
-    Performs jacobi-like procedure to approximately diagonalize
-    a set of matrices X
-
-    Parameters
-    ----------
-    X : np.ndarray
-        Has dimensions [num_matrices, num_rows, num_cols]
-    eps : scalar, optional
-        Stopping criterion based on eps tolerance, should be between 0 and infinity
-    random_order : bool, optional
-        If True, pivots will cycle randomly for givens rotations.
-        May affect convergence rate but not the final soltuion
-
-    Returns
-    -------
-    V : np.ndarray
-        2D array containing diagonalizing transformation
-        i.e. (V.T).dot( X ).dot( V ) will be approximately diagonal
-    
+def whitening(X):
     """
-
-    X = np.atleast_3d(X)
-    V = np.eye(X.shape[1])
-
-    keep_going = True
-    counter = 0
-    off_val = []
-    while keep_going:
-        print('{}: {}'.format(counter, off(X)))
-        counter += 1
-        keep_going = False
-
-        ij_pairs = generate_index_pairs(range(X.shape[1]), 
-                                        random_order = random_order)
+    Function that withens the data.
+    
+    Attributes:
+        * X: time series data
         
-        for (i,j) in ij_pairs:
-            # Extract submatrix
-            idx = (slice(None), ) + np.ix_([i,j],[i,j])
-            A = X[idx]*1.0
-
-            # Find givens rotation matrix
-            R = find_givens_rotation(A)
-
-            if abs(R[0,1]) > eps: # sin_theta = R[0,1]
-                keep_going = True 
-                # Update X and V matrices
-
-                # X' = R^T X R
-                X = submat_mul(X, i, j, R, multype='post')
-                X = submat_mul(X, i, j, R, multype='pre')
-
-                # V = V R
-                V = submat_mul(V, i, j, R, multype='post')
-
-    return V
-
-def find_givens_rotation(A):
-
+    Returns:
+        * Whitened data
+        * Singular vectors
+        * singular values
     """
-    Belouchrani, A., et al. “A Blind Source Separation Technique Using 
-    Second-Order Statistics.” IEEE Transactions on Signal Processing: 
-    A Publication of the IEEE Signal Processing Society, vol. 45, 
-    no. 2, Feb. 1997, pp. 434–44, doi:10.1109/78.554307.
-
-    See Appendix A
-    """
-    G   = np.array( [ A[:,0,0] - A[:,1,1], A[:,0,1] + A[:,1,0] ] )
-    G   = np.atleast_2d(G).T
-    GHG = np.dot(G.T, G)
-    v = max_eigvec(GHG)
     
-    v = np.sign(v[0])*v
-    cos_theta = np.sqrt(0.5 + 0.5*v[0])
-    sin_theta = -0.5*v[1]/(cos_theta)
+    X = center(X)
+    U, d, _ = np.linalg.svd(X, full_matrices=False)
+    U_d = (U / d).T
+    X_whiten = np.dot(U_d, X) * np.sqrt(X.shape[1])
+    
+    return X_whiten, U, d
+    
+def off_frobenius(M):
+    
+    """
+    Computes the square Frobenius norm of the matrix M-diag(M)
+    
+    Attributes:
+        * M: square matrix
+        
+    Returns:
+        * Off-diagonal Frobenius norm
+    
+    
+    """
+    
+    return (np.linalg.norm(np.tril(M, k=-1), ord='fro')**2 + np.linalg.norm(np.triu(M, k=1), ord='fro')**2)
 
-    R = np.array([[ cos_theta,  -sin_theta],
-                    [ sin_theta, cos_theta]])
-
+def rotation(M):
+    
+    """
+    This function infers Jacobi rotation matrix R used in the joint diagonalization of a set of matrices
+    
+    See: https://en.wikipedia.org/wiki/Jacobi_rotation
+    
+    Attributes:
+        * M: matrix to be rotated
+        
+    Returns:
+        * Rotation matrix
+    
+    
+    """
+    
+    h = np.array([M[:, 0, 0] - M[:, 1, 1], 
+                  M[:, 1, 0] + M[:, 0, 1], 
+                  1j*(M[:, 1, 0] - M[:, 0, 1])]).T
+    G = np.real(h.T.dot(h))
+    [eigvals,v] = np.linalg.eigh(G)
+    [x, y, z] = np.sign(v[0, -1])*v[:,-1]
+    
+    r = np.sqrt(x**2 + y**2 + z**2)
+    c = np.sqrt((x + r) / (2*r))
+    s = (y - 1j*z) / np.sqrt(2*r*(x + r))
+    
+    R = np.array([[c, np.conjugate(s)], [-s, np.conjugate(c)]])
+    
     return R
 
-def sobi(X, num_lags=None, eps=1.0e-6, random_order = True):
-
-    """blind source separation technique using SOBI algorithm
-
-    The "second-order blind source idenitification" algorithm is 
-    a blind-source separation technique that works by jointly diagonalizing
-    a set of time-lagged covariance matrices. 
-
-    Parameters
-    ----------
-    X : np.ndarray
-        Has dimensions [num_signals, num_samples]
-    num_lags : int
-        Number of time-lags to use in forming covariance matrices
-    eps : scalar, optional
-        Stopping criterion based on eps tolerance, should be between 0 and infinity
-    random_order : bool, optional
-        If True, pivots will cycle randomly for givens rotations.
-        May affect convergence rate but not the final soltuion
-
-    Returns
-    -------
-    S : np.ndarray
-        2D array containing estimated source signals
-    
-    A : np.ndarray
-        2D array containing mixing matrix
-        i.e. A.dot(S) = X
-    
-    W : np.ndarray
-        2D array containing unmixing matrix
-        i.e. W.dot(X) = S
+def joint_diagonalization(C, V=None, eps=1e-3, max_iter=1000, verbose=-1):
     
     """
-
-    if num_lags is None:
-        num_lags = np.minimum(1000, int(X.shape[1]/2))
-
-    Q, Xw = prewhiten(X)
-
-    R = time_lagged_cov(Xw, num_lags)
-
-    V = jd(R*1.0, eps=eps)
-
-    W = (V.T).dot(Q)
-    A = np.linalg.pinv(W)
-    S = W.dot(X)
-
-    return S, A, W
-
-
+    Joint diagonalization of a set of matrices C
     
+    Attributes:
+        * C: set of symmetric matrices
+        * V:  a priori eigan-vectors of the matrices C (default=None)
+        * eps: tolerance for stopping criteria (default=1e-3)
+        * max_iter: maximum number of iterations taken for the solvers to converge (default=1000)
     
+    Returns:
+        * V: a posteriori eigen-vectors of the matrices C
+        * C: diagonalized matrices
+        
+    """
+    
+    d = C.shape[1]
+    list_pairs = list(itertools.combinations(range(d), 2))
+    
+    if V is None:
+        V = np.eye(d) + 1j*np.zeros((d, d))
 
+    O_cs = np.sum([off_frobenius(c) for c in C])
+    counter = 0
+    
+    if verbose > 0:
+        print('Iter: {:.0f}, Diagonalization: {:.2f}'.format(counter, O_cs))
+        
+    diff = np.inf
+    
+    while ((diff > eps) and (counter < max_iter)):
+        counter += 1
+        for (i,j) in list_pairs:
+            V_ = np.eye(d) + 1j*np.zeros((d, d))
+            idx = (slice(None), ) + np.ix_([i,j],[i,j])
+            R = rotation(C[idx])
+            V_[np.ix_([i,j],[i,j])] = V_[np.ix_([i,j],[i,j])].dot(R)
+            V = V.dot(V_.T)
+            C = np.matmul(np.matmul(V_, C), V_.T)
 
+        O_cs_new = np.sum([off_frobenius(c) for c in C])
+        diff = np.abs(O_cs - O_cs_new)
+    
+        if verbose > 0:
+            print('Iter: {:.0f}, Diagonalization: {:.2f}'.format(counter, O_cs))
+        O_cs = O_cs_new
+        
+    return V, C
+
+class SOBI(TransformerMixin, BaseEstimator):
+    
+    """
+    
+    Linear ICA for time series data using joint diagonalization of the lagged-autocovariance matrices
+    
+    """
+    
+    def __init__(self, lags=1, eps=1e-3, max_iter=1000):
+        
+        self.lags = lags
+        self.eps = eps
+        self.max_iter = max_iter
+        self.is_fitted_ = False
+    
+    def fit(self, X):
+        
+        """
+        
+        Attributes:
+            * X: time series data (dimension: time x variables)
+            * lags: number of lags to consider (default=1)
+            * eps: tolerance for stopping criteria (default=1e-3)
+            * max_iter: maximum number of iterations taken for the solvers to converge (default=1000)
+
+        """
+
+        X_white, U, d = whitening(X.T)
+        C = time_lagged_autocov(X_white, self.lags)
+        C = C + 1J*np.zeros_like(C)
+        V, C = joint_diagonalization(C, eps=self.eps, max_iter=self.max_iter)
+        self.W = (V.T).dot((U / d).T)
+        
+        self.is_fitted_ = True
+
+    def transform(self, X):
+        """
+        Attributes:
+            * X: time series data (dimension: time x variables)
+
+        Returns:
+            * Estimated sources
+
+        """
+        
+        check_is_fitted(self, 'is_fitted_')
+        return np.real(X.dot(self.W.T))
+    
+    def fit_transform(self, X):
+        
+        """
+        
+        Attributes:
+            * X: time series data (dimension: time x variables)
+            * lags: number of lags to consider (default=1)
+            * eps: tolerance for stopping criteria (default=1e-3)
+            * max_iter: maximum number of iterations taken for the solvers to converge (default=1000)
+
+        Returns:
+            * Estimated sources
+
+        """
+        
+        self.fit(X)
+        return self.transform(X)
+    

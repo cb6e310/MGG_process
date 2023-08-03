@@ -1,6 +1,8 @@
 import scipy.signal as signal
 
 from scipy.signal import butter, lfilter, freqz, sosfiltfilt, filtfilt
+from sklearn.decomposition import FastICA, PCA
+from skimage.restoration import denoise_wavelet
 
 import numpy as np
 
@@ -8,8 +10,13 @@ import matplotlib.pyplot as plt
 
 import os, sys
 
-import emd
+import emd, pydmd
 import padasip as pa
+import pywt
+from vmdpy import VMD
+
+
+from sobi import SOBI
 
 
 def __butter_lowpass(cutoff, fs, order):
@@ -46,11 +53,19 @@ def notch_filter(data, fs, cutoff, Q=30):
     return data
 
 
+def pca_filter(data):
+    pca = PCA(n_components=1)
+    pca.fit(data)
+    dominant_component = pca.components_[0]
+    return dominant_component
+
+
 def emd_filter(data, emd_mode, denoise_mode, plot=False, select=None):
     """
     emd_mode: 0 for emd, 1 for ensemble emd
     denoise_mode: 0 for direct denoise, 1 for interval denoise
     """
+
     def _interval_denoise(imf_noisy):
         H = 0.8
         H_to_params = {
@@ -85,22 +100,19 @@ def emd_filter(data, emd_mode, denoise_mode, plot=False, select=None):
                 for k in range(1, energies_noisy.shape[0])
             ]
         )
-
         a = H_to_params[H]["a"]
         b = H_to_params[H]["b"]
-
         model_noisy_interval = (
             np.array(
                 [np.exp(np.exp(a * k + b)) for k in range(energies_noisy.shape[0])]
             )
             * model_noisy
         )
-        
         denoised = imf_noisy[:, energies_noisy > model_noisy_interval].sum(axis=1)
         return denoised
 
-    def _direct_denoise(imf_noisy, select=[5,6,7]):
-        denoised = imf_noisy[:, select].sum(axis=1)
+    def _direct_denoise(imf_noisy, select=[5, 6, 7]):
+        denoised = imf_noisy[:, select]
         return denoised
 
     data = np.squeeze(np.array(data))
@@ -121,7 +133,114 @@ def emd_filter(data, emd_mode, denoise_mode, plot=False, select=None):
 
     return IMFs, denoised
 
-def lms_filter(data):
+
+def adaptive_filter(x, desired_output=None):
+    x = pa.standardize(x)
+    n = 50
+    adaptive_filter = pa.filters.FilterRLS(n=n, mu=0.9)
+    x_matrix = pa.input_from_history(x, n)[:-1]
+    x = x[n:]
+    y, e, w = adaptive_filter.run(x, x_matrix)
+    # Apply online adaptive filtering
+    return y
+
+
+def sobi_filter(data):
+    ica = SOBI(lags=10)
+    # data = np.squeeze(np.array(data))
+    ica.fit(data)
+    return ica.transform(data)
+
+
+def fastica_filter(data, n_components=8):
     data = np.squeeze(np.array(data))
-    f = pa.filters.FilterLMS(3, mu=0.1)
-    y, e, w = f.run(data, data)
+    ica = FastICA(n_components=n_components)
+    S_ = ica.fit_transform(data.reshape(-1, 1))  # Reconstruct signals
+    return S_
+
+
+def vmd_filter(data, select=[5, 6, 7]):
+    data = np.squeeze(np.array(data))
+
+    # . some sample parameters for VMD
+    alpha = 20000  # moderate bandwidth constraint
+    tau = 0.0  # noise-tolerance (no strict fidelity enforcement)
+    K = 8  # 3 modes
+    DC = 0  # no DC part imposed
+    init = 1  # initialize omegas uniformly
+    tol = 1e-7
+
+    # . Run VMD
+    u, u_hat, omega = VMD(data, alpha, tau, K, DC, init, tol)
+
+    def _direct_denoise(imf_noisy, select=[5, 6, 7]):
+        denoised = imf_noisy[:, select].sum(axis=1)
+        return denoised
+
+    return u.T
+
+
+def dmd_filter(data, return_mode="reconstructed"):
+    data = np.squeeze(np.array(data))
+    mean = np.mean(data)
+    scale = np.std(data)
+    data = pa.standardize(data, offset=mean, scale=scale)
+    hodmd = pydmd.HODMD(svd_rank=0, exact=True, opt=True, d=30).fit(data[None])
+    if return_mode == "reconstructed":
+        filtered = hodmd.reconstructed_data[0].real
+        return pa.preprocess.standardize_back(filtered, offset=mean, scale=scale)
+    elif return_mode == "modes":
+        imfs = hodmd.modes.T
+        dynamic = hodmd.dynamics.T
+        return imfs, dynamic
+    pass
+
+
+def calculate_baseline(signal):
+    """
+    Calculate the baseline of signal.
+
+    Args:
+        signal (numpy 1d array): signal whose baseline should be calculated
+
+
+    Returns:
+        baseline (numpy 1d array with same size as signal): baseline of the signal
+    """
+    ssds = np.zeros((3))
+
+    cur_lp = np.copy(signal)
+    iterations = 0
+    while True:
+        # Decompose 1 level
+        lp, hp = pywt.dwt(cur_lp, "db4")
+
+        # Shift and calculate the energy of detail/high pass coefficient
+        ssds = np.concatenate(([np.sum(hp**2)], ssds[:-1]))
+
+        # Check if we are in the local minimum of energy function of high-pass signal
+        if ssds[2] > ssds[1] and ssds[1] < ssds[0]:
+            break
+
+        cur_lp = lp[:]
+        iterations += 1
+
+    # Reconstruct the baseline from this level low pass signal up to the original length
+    baseline = cur_lp[:]
+    for _ in range(iterations):
+        baseline = pywt.idwt(baseline, np.zeros((len(baseline))), "db4")
+
+    return baseline[: len(signal)]
+
+
+def wavelet_filter(data, wavelet, level=1, threshold=0.5):
+    data = np.squeeze(np.array(data))
+    denoised = denoise_wavelet(
+        data,
+        mode="soft",
+        wavelet_levels=level,
+        wavelet=wavelet,
+        rescale_sigma="True",
+    )
+
+    return denoised

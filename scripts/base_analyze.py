@@ -61,9 +61,10 @@ if __name__ == "__main__":
     # data_noise = TDMSData(folder_path=folder_path_noise, name_condition='noise' ,resample_mode=None)
 
 
-    # data_2 = TDMSData(
-    #     folder_path=folder_path, name_condition="MMG-W", resample_mode=None
-    # )
+    data_2 = TDMSData(
+        folder_path=folder_path, name_condition="MMG-W", resample_mode=None
+    )
+    data_2.plot_samples()
     # data_noise.plot_psd(limit=500)
     # data_noise.plot_samples()
 
